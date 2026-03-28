@@ -1,39 +1,438 @@
 "use client";
 
+import {
+  crearCliente,
+  listarClientesAdmin,
+  type ClienteAdminRow,
+} from "@/actions/admin";
+import {
+  CATALOGO_BASE,
+  emptyPermisos,
+  permisosFullAccess,
+  type CatalogMarca,
+  type CatalogSection,
+  type PermisosCatalogo,
+} from "@/lib/catalog-structure";
+import { isRolAdmin } from "@/lib/auth-roles";
+import { createClient } from "@/lib/supabase/client";
 import Link from "next/link";
-import { useState } from "react";
+import { useRouter } from "next/navigation";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 type AdminTab = "clientes" | "marcas";
 
-const MOCK_CLIENTES = [
-  {
-    id: "1",
-    local: "Local Centro",
-    email: "pedidos.centro@localcentro.com.ar",
-    marcas: ["Reebok", "Crocs"],
-  },
-  {
-    id: "2",
-    local: "Distribuidora Sur",
-    email: "compras@distsur.com.ar",
-    marcas: ["Kappa", "Columbia"],
-  },
-  {
-    id: "3",
-    local: "Sport House Norte",
-    email: "mayorista@sporthouse.ar",
-    marcas: ["Reebok", "Kappa", "Crocs", "Columbia"],
-  },
-  {
-    id: "4",
-    local: "Calzados Rivadavia",
-    email: "rivadavia.calzados@gmail.com",
-    marcas: ["Crocs"],
-  },
-];
+type ModalState =
+  | null
+  | { mode: "create" }
+  | { mode: "edit"; row: ClienteAdminRow };
+
+function countPlanillasMarca(marca: CatalogMarca): number {
+  return marca.sections.reduce((acc, s) => acc + s.planillas.length, 0);
+}
+
+function countSelectedEnMarca(
+  permisos: PermisosCatalogo,
+  marca: CatalogMarca
+): number {
+  const m = permisos[marca.slug];
+  if (!m) return 0;
+  let n = 0;
+  for (const s of marca.sections) {
+    const set = new Set(m[s.id] ?? []);
+    for (const p of s.planillas) {
+      if (set.has(p.id)) n++;
+    }
+  }
+  return n;
+}
+
+function countSelectedEnSeccion(
+  permisos: PermisosCatalogo,
+  marcaSlug: string,
+  section: CatalogSection
+): number {
+  const m = permisos[marcaSlug];
+  if (!m) return 0;
+  const set = new Set(m[section.id] ?? []);
+  return section.planillas.filter((p) => set.has(p.id)).length;
+}
+
+function clonePermisos(p: PermisosCatalogo): PermisosCatalogo {
+  const out: PermisosCatalogo = {};
+  for (const k of Object.keys(p)) {
+    out[k] = { ...p[k] };
+    for (const s of Object.keys(out[k])) {
+      out[k][s] = [...(p[k][s] ?? [])];
+    }
+  }
+  return out;
+}
+
+function limpiarVacios(permisos: PermisosCatalogo): PermisosCatalogo {
+  const out = clonePermisos(permisos);
+  for (const marcaSlug of Object.keys(out)) {
+    const sec = out[marcaSlug];
+    for (const sid of Object.keys(sec)) {
+      if (!sec[sid]?.length) delete sec[sid];
+    }
+    if (Object.keys(sec).length === 0) delete out[marcaSlug];
+  }
+  return out;
+}
+
+function PermisosCatalogoEditor({
+  value,
+  onChange,
+}: {
+  value: PermisosCatalogo;
+  onChange: (next: PermisosCatalogo) => void;
+}) {
+  const marcaRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const seccionRefs = useRef<Record<string, HTMLInputElement | null>>({});
+
+  const marcaStates = useMemo(() => {
+    const map: Record<
+      string,
+      { checked: boolean; indeterminate: boolean }
+    > = {};
+    for (const m of CATALOGO_BASE) {
+      const total = countPlanillasMarca(m);
+      const sel = countSelectedEnMarca(value, m);
+      map[m.slug] = {
+        checked: total > 0 && sel === total,
+        indeterminate: sel > 0 && sel < total,
+      };
+    }
+    return map;
+  }, [value]);
+
+  const seccionStates = useMemo(() => {
+    const map: Record<string, { checked: boolean; indeterminate: boolean }> =
+      {};
+    for (const m of CATALOGO_BASE) {
+      for (const s of m.sections) {
+        const key = `${m.slug}:${s.id}`;
+        const total = s.planillas.length;
+        const sel = countSelectedEnSeccion(value, m.slug, s);
+        map[key] = {
+          checked: total > 0 && sel === total,
+          indeterminate: sel > 0 && sel < total,
+        };
+      }
+    }
+    return map;
+  }, [value]);
+
+  useEffect(() => {
+    for (const m of CATALOGO_BASE) {
+      const el = marcaRefs.current[m.slug];
+      if (el) {
+        const st = marcaStates[m.slug];
+        el.indeterminate = st.indeterminate;
+      }
+      for (const s of m.sections) {
+        const key = `${m.slug}:${s.id}`;
+        const elS = seccionRefs.current[key];
+        if (elS) {
+          elS.indeterminate = seccionStates[key].indeterminate;
+        }
+      }
+    }
+  }, [marcaStates, seccionStates]);
+
+  const toggleMarca = (marca: CatalogMarca) => {
+    const total = countPlanillasMarca(marca);
+    const sel = countSelectedEnMarca(value, marca);
+    const full = total > 0 && sel === total;
+    const next = clonePermisos(value);
+    if (full || sel > 0) {
+      delete next[marca.slug];
+    } else {
+      next[marca.slug] = {};
+      for (const s of marca.sections) {
+        next[marca.slug][s.id] = s.planillas.map((p) => p.id);
+      }
+    }
+    onChange(limpiarVacios(next));
+  };
+
+  const toggleSeccion = (marca: CatalogMarca, section: CatalogSection) => {
+    const total = section.planillas.length;
+    const sel = countSelectedEnSeccion(value, marca.slug, section);
+    const full = total > 0 && sel === total;
+    const next = clonePermisos(value);
+    if (!next[marca.slug]) next[marca.slug] = {};
+    if (full) {
+      delete next[marca.slug][section.id];
+    } else {
+      next[marca.slug][section.id] = section.planillas.map((p) => p.id);
+    }
+    onChange(limpiarVacios(next));
+  };
+
+  const togglePlanilla = (
+    marca: CatalogMarca,
+    section: CatalogSection,
+    planillaId: string
+  ) => {
+    const next = clonePermisos(value);
+    if (!next[marca.slug]) next[marca.slug] = {};
+    const cur = new Set(next[marca.slug][section.id] ?? []);
+    if (cur.has(planillaId)) cur.delete(planillaId);
+    else cur.add(planillaId);
+    next[marca.slug][section.id] = Array.from(cur);
+    onChange(limpiarVacios(next));
+  };
+
+  return (
+    <div className="max-h-[min(52vh,420px)] space-y-2 overflow-y-auto rounded-xl border border-neutral-800 bg-neutral-950/50 p-3">
+      <p className="text-xs text-neutral-500">
+        Marca completa incluye todas las secciones y planillas. Podés dejar
+        estados parciales.
+      </p>
+      {CATALOGO_BASE.map((marca) => {
+        const ms = marcaStates[marca.slug];
+        return (
+          <details
+            key={marca.slug}
+            className="group rounded-lg border border-neutral-800/80 bg-neutral-900/40 open:border-neutral-700"
+            open
+          >
+            <summary className="flex cursor-pointer list-none items-center gap-3 px-3 py-2.5 text-sm font-medium text-white [&::-webkit-details-marker]:hidden">
+              <input
+                ref={(el) => {
+                  marcaRefs.current[marca.slug] = el;
+                }}
+                type="checkbox"
+                checked={ms.checked}
+                onChange={() => toggleMarca(marca)}
+                onClick={(e) => e.stopPropagation()}
+                className="size-4 shrink-0 rounded border-neutral-600 bg-neutral-900 text-white focus:ring-2 focus:ring-white/30"
+              />
+              <span className="flex-1">{marca.name}</span>
+              <span className="text-neutral-500 group-open:rotate-180">▼</span>
+            </summary>
+            <div className="space-y-1 border-t border-neutral-800/80 px-2 py-2">
+              {marca.sections.map((section) => {
+                const sk = `${marca.slug}:${section.id}`;
+                const ss = seccionStates[sk];
+                return (
+                  <div key={section.id} className="rounded-md py-1 pl-6">
+                    <label className="flex cursor-pointer items-start gap-2 text-sm text-neutral-200">
+                      <input
+                        ref={(el) => {
+                          seccionRefs.current[sk] = el;
+                        }}
+                        type="checkbox"
+                        checked={ss.checked}
+                        onChange={() => toggleSeccion(marca, section)}
+                        className="mt-0.5 size-4 shrink-0 rounded border-neutral-600 bg-neutral-900 text-white focus:ring-2 focus:ring-white/30"
+                      />
+                      <span className="font-medium">{section.title}</span>
+                    </label>
+                    <div className="mt-1 space-y-1 pl-6">
+                      {section.planillas.map((p) => {
+                        const set = new Set(
+                          value[marca.slug]?.[section.id] ?? []
+                        );
+                        const checked = set.has(p.id);
+                        return (
+                          <label
+                            key={p.id}
+                            className="flex cursor-pointer items-center gap-2 text-xs text-neutral-400 hover:text-neutral-200"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() =>
+                                togglePlanilla(marca, section, p.id)
+                              }
+                              className="size-3.5 shrink-0 rounded border-neutral-600 bg-neutral-900 text-white focus:ring-2 focus:ring-white/30"
+                            />
+                            {p.title}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </details>
+        );
+      })}
+    </div>
+  );
+}
 
 export default function AdminPage() {
+  const router = useRouter();
   const [tab, setTab] = useState<AdminTab>("clientes");
+  const [sessionReady, setSessionReady] = useState(false);
+  const [gateAdmin, setGateAdmin] = useState(false);
+
+  const [rows, setRows] = useState<ClienteAdminRow[]>([]);
+  const [listLoading, setListLoading] = useState(true);
+  const [listError, setListError] = useState<string | null>(null);
+
+  const [modal, setModal] = useState<ModalState>(null);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [nombreLocal, setNombreLocal] = useState("");
+  const [esAdminRol, setEsAdminRol] = useState(false);
+  const [permisos, setPermisos] = useState<PermisosCatalogo>(() =>
+    emptyPermisos()
+  );
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const refreshList = useCallback(async () => {
+    setListLoading(true);
+    setListError(null);
+    const res = await listarClientesAdmin();
+    if (!res.ok) {
+      setListError(res.error);
+      setRows([]);
+    } else {
+      setRows(res.data.rows);
+    }
+    setListLoading(false);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      const supabase = createClient();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (cancelled) return;
+
+      if (!session) {
+        router.replace("/login");
+        return;
+      }
+
+      const { data: cliente, error } = await supabase
+        .from("clientes")
+        .select("rol")
+        .eq("id", session.user.id)
+        .single();
+
+      if (cancelled) return;
+
+      if (error || !isRolAdmin(cliente?.rol)) {
+        router.replace("/");
+        return;
+      }
+
+      setGateAdmin(true);
+      setSessionReady(true);
+      await refreshList();
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [router, refreshList]);
+
+  const openCreate = () => {
+    setFormError(null);
+    setEmail("");
+    setPassword("");
+    setNombreLocal("");
+    setEsAdminRol(false);
+    setPermisos(emptyPermisos());
+    setModal({ mode: "create" });
+  };
+
+  const openEdit = (row: ClienteAdminRow) => {
+    setFormError(null);
+    setEmail(row.email);
+    setPassword("");
+    setNombreLocal(row.nombre_local ?? "");
+    setEsAdminRol(isRolAdmin(row.rol));
+    setPermisos(
+      row.permisos_catalogo && Object.keys(row.permisos_catalogo).length
+        ? clonePermisos(row.permisos_catalogo as PermisosCatalogo)
+        : emptyPermisos()
+    );
+    setModal({ mode: "edit", row });
+  };
+
+  const closeModal = (force?: boolean) => {
+    if (saving && !force) return;
+    setModal(null);
+    setFormError(null);
+  };
+
+  const handleMarcarTodo = () => setPermisos(permisosFullAccess());
+  const handleLimpiarPermisos = () => setPermisos(emptyPermisos());
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormError(null);
+    setSaving(true);
+
+    try {
+      if (modal?.mode === "create") {
+        const res = await crearCliente(
+          email.trim(),
+          password,
+          nombreLocal.trim(),
+          permisos,
+          esAdminRol ? "admin" : "cliente"
+        );
+        if (!res.ok) {
+          setFormError(res.error);
+          return;
+        }
+        closeModal(true);
+        await refreshList();
+        return;
+      }
+
+      if (modal?.mode === "edit") {
+        const supabase = createClient();
+        const { error } = await supabase
+          .from("clientes")
+          .update({
+            nombre_local: nombreLocal.trim(),
+            permisos_catalogo: permisos,
+            rol: esAdminRol ? "admin" : "cliente",
+          })
+          .eq("id", modal.row.id);
+
+        if (error) {
+          setFormError(
+            error.message +
+              " · Si falla por RLS, añadí una política que permita a admins actualizar otras filas."
+          );
+          return;
+        }
+        closeModal(true);
+        await refreshList();
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!sessionReady || !gateAdmin) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-neutral-950 text-neutral-400">
+        <p className="text-sm">Cargando panel…</p>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-50 antialiased selection:bg-white selection:text-neutral-950">
@@ -58,12 +457,14 @@ export default function AdminPage() {
               Panel de Administración — Grisma
             </h1>
             <p className="mt-2 max-w-xl text-sm text-neutral-400">
-              Gestión centralizada de clientes B2B y marcas habilitadas.
+              Alta de usuarios, permisos por catálogo (marca → sección →
+              planilla) y roles.
             </p>
           </div>
           {tab === "clientes" && (
             <button
               type="button"
+              onClick={openCreate}
               className="inline-flex shrink-0 items-center justify-center gap-2 rounded-full bg-white px-5 py-2.5 text-sm font-semibold text-neutral-950 shadow-lg shadow-black/20 transition hover:bg-neutral-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
             >
               <span className="text-lg leading-none">+</span>
@@ -90,7 +491,7 @@ export default function AdminPage() {
               Gestión de Clientes
             </h2>
             <p className="mt-2 text-sm text-neutral-400">
-              Locales, accesos y marcas permitidas por cuenta.
+              Locales, accesos y permisos granulares.
             </p>
           </button>
 
@@ -129,72 +530,87 @@ export default function AdminPage() {
                 Clientes registrados
               </h3>
               <p className="mt-0.5 text-xs text-neutral-500">
-                Datos de prueba · la lógica se conectará más adelante.
+                Datos desde Supabase (auth + tabla clientes).
               </p>
+              {listError && (
+                <p className="mt-2 text-xs text-red-400">{listError}</p>
+              )}
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[640px] text-left text-sm">
-                <thead>
-                  <tr className="border-b border-neutral-800 bg-neutral-900/80">
-                    <th className="px-4 py-3 text-xs font-medium uppercase tracking-wider text-neutral-500 sm:px-6">
-                      Nombre del Local
-                    </th>
-                    <th className="px-4 py-3 text-xs font-medium uppercase tracking-wider text-neutral-500 sm:px-6">
-                      Email
-                    </th>
-                    <th className="px-4 py-3 text-xs font-medium uppercase tracking-wider text-neutral-500 sm:px-6">
-                      Marcas permitidas
-                    </th>
-                    <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-neutral-500 sm:px-6">
-                      Acciones
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-neutral-800">
-                  {MOCK_CLIENTES.map((row) => (
-                    <tr
-                      key={row.id}
-                      className="transition hover:bg-neutral-800/40"
-                    >
-                      <td className="whitespace-nowrap px-4 py-4 font-medium text-white sm:px-6">
-                        {row.local}
-                      </td>
-                      <td className="px-4 py-4 text-neutral-400 sm:px-6">
-                        {row.email}
-                      </td>
-                      <td className="px-4 py-4 sm:px-6">
-                        <div className="flex flex-wrap gap-1.5">
-                          {row.marcas.map((m) => (
-                            <span
-                              key={m}
-                              className="rounded-full border border-neutral-700 bg-neutral-800/50 px-2.5 py-0.5 text-xs text-neutral-300"
-                            >
-                              {m}
-                            </span>
-                          ))}
-                        </div>
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-4 text-right sm:px-6">
-                        <div className="flex justify-end gap-2">
-                          <button
-                            type="button"
-                            className="rounded-lg border border-neutral-700 px-3 py-1.5 text-xs font-medium text-neutral-300 transition hover:border-neutral-500 hover:bg-neutral-800 hover:text-white"
-                          >
-                            Editar
-                          </button>
-                          <button
-                            type="button"
-                            className="rounded-lg border border-red-900/60 px-3 py-1.5 text-xs font-medium text-red-300/90 transition hover:border-red-700 hover:bg-red-950/40 hover:text-red-200"
-                          >
-                            Eliminar
-                          </button>
-                        </div>
-                      </td>
+              {listLoading ? (
+                <p className="px-6 py-10 text-sm text-neutral-500">
+                  Cargando clientes…
+                </p>
+              ) : (
+                <table className="w-full min-w-[640px] text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-neutral-800 bg-neutral-900/80">
+                      <th className="px-4 py-3 text-xs font-medium uppercase tracking-wider text-neutral-500 sm:px-6">
+                        Local
+                      </th>
+                      <th className="px-4 py-3 text-xs font-medium uppercase tracking-wider text-neutral-500 sm:px-6">
+                        Email
+                      </th>
+                      <th className="px-4 py-3 text-xs font-medium uppercase tracking-wider text-neutral-500 sm:px-6">
+                        Rol
+                      </th>
+                      <th className="px-4 py-3 text-xs font-medium uppercase tracking-wider text-neutral-500 sm:px-6">
+                        Permisos
+                      </th>
+                      <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-neutral-500 sm:px-6">
+                        Acciones
+                      </th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-neutral-800">
+                    {rows.map((row) => {
+                      const marcasCount = row.permisos_catalogo
+                        ? Object.keys(row.permisos_catalogo).length
+                        : 0;
+                      return (
+                        <tr
+                          key={row.id}
+                          className="transition hover:bg-neutral-800/40"
+                        >
+                          <td className="whitespace-nowrap px-4 py-4 font-medium text-white sm:px-6">
+                            {row.nombre_local || "—"}
+                          </td>
+                          <td className="px-4 py-4 text-neutral-400 sm:px-6">
+                            {row.email || "—"}
+                          </td>
+                          <td className="px-4 py-4 sm:px-6">
+                            <span
+                              className={[
+                                "rounded-full border px-2.5 py-0.5 text-xs",
+                                isRolAdmin(row.rol)
+                                  ? "border-amber-700/60 bg-amber-950/40 text-amber-200"
+                                  : "border-neutral-700 bg-neutral-800/50 text-neutral-300",
+                              ].join(" ")}
+                            >
+                              {isRolAdmin(row.rol) ? "admin" : row.rol ?? "—"}
+                            </span>
+                          </td>
+                          <td className="px-4 py-4 text-neutral-400 sm:px-6">
+                            {marcasCount > 0
+                              ? `${marcasCount} marca(s) configuradas`
+                              : "Sin catálogo"}
+                          </td>
+                          <td className="whitespace-nowrap px-4 py-4 text-right sm:px-6">
+                            <button
+                              type="button"
+                              onClick={() => openEdit(row)}
+                              className="rounded-lg border border-neutral-700 px-3 py-1.5 text-xs font-medium text-neutral-300 transition hover:border-neutral-500 hover:bg-neutral-800 hover:text-white"
+                            >
+                              Editar
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
             </div>
           </section>
         )}
@@ -211,12 +627,171 @@ export default function AdminPage() {
               Gestión de Marcas
             </h3>
             <p className="mx-auto mt-2 max-w-md text-sm text-neutral-500">
-              Aquí irá el listado y la configuración de marcas. Por ahora solo
-              la interfaz de clientes está detallada.
+              Próximamente. Los permisos por marca ya se definen al crear o
+              editar clientes.
             </p>
           </section>
         )}
       </main>
+
+      {modal && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-4 backdrop-blur-sm sm:items-center"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="modal-title"
+        >
+          <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-neutral-800 bg-neutral-950 shadow-2xl">
+            <div className="sticky top-0 flex items-center justify-between border-b border-neutral-800 bg-neutral-950/95 px-5 py-4 backdrop-blur">
+              <h2
+                id="modal-title"
+                className="text-lg font-semibold text-white"
+              >
+                {modal.mode === "create"
+                  ? "Crear cliente"
+                  : "Editar cliente"}
+              </h2>
+              <button
+                type="button"
+                onClick={() => closeModal()}
+                disabled={saving}
+                className="rounded-lg px-2 py-1 text-sm text-neutral-500 hover:bg-neutral-800 hover:text-white disabled:opacity-50"
+              >
+                Cerrar
+              </button>
+            </div>
+
+            <form onSubmit={(e) => void handleSubmit(e)} className="space-y-4 p-5">
+              <div>
+                <label
+                  htmlFor="admin-email"
+                  className="block text-xs font-medium text-neutral-400"
+                >
+                  Email
+                </label>
+                <input
+                  id="admin-email"
+                  type="email"
+                  autoComplete="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  disabled={modal.mode === "edit" || saving}
+                  required={modal.mode === "create"}
+                  className="mt-1 w-full rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm text-white placeholder:text-neutral-600 focus:border-neutral-600 focus:outline-none disabled:opacity-60"
+                  placeholder="cliente@ejemplo.com"
+                />
+              </div>
+
+              {modal.mode === "create" && (
+                <div>
+                  <label
+                    htmlFor="admin-pass"
+                    className="block text-xs font-medium text-neutral-400"
+                  >
+                    Contraseña
+                  </label>
+                  <input
+                    id="admin-pass"
+                    type="password"
+                    autoComplete="new-password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    disabled={saving}
+                    required
+                    minLength={6}
+                    className="mt-1 w-full rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm text-white placeholder:text-neutral-600 focus:border-neutral-600 focus:outline-none"
+                    placeholder="Mínimo 6 caracteres"
+                  />
+                </div>
+              )}
+
+              <div>
+                <label
+                  htmlFor="admin-local"
+                  className="block text-xs font-medium text-neutral-400"
+                >
+                  Nombre del local
+                </label>
+                <input
+                  id="admin-local"
+                  type="text"
+                  value={nombreLocal}
+                  onChange={(e) => setNombreLocal(e.target.value)}
+                  disabled={saving}
+                  required
+                  className="mt-1 w-full rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm text-white placeholder:text-neutral-600 focus:border-neutral-600 focus:outline-none"
+                  placeholder="Ej. Local Centro"
+                />
+              </div>
+
+              <label className="flex cursor-pointer items-center gap-2 text-sm text-neutral-200">
+                <input
+                  type="checkbox"
+                  checked={esAdminRol}
+                  onChange={(e) => setEsAdminRol(e.target.checked)}
+                  disabled={saving}
+                  className="size-4 rounded border-neutral-600 bg-neutral-900"
+                />
+                Rol administrador (ve el lápiz de edición en el portal)
+              </label>
+
+              <div>
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs font-medium text-neutral-400">
+                    Permisos de catálogo
+                  </span>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={handleMarcarTodo}
+                      disabled={saving}
+                      className="text-xs text-neutral-400 underline hover:text-white disabled:opacity-50"
+                    >
+                      Marcar todo
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleLimpiarPermisos}
+                      disabled={saving}
+                      className="text-xs text-neutral-400 underline hover:text-white disabled:opacity-50"
+                    >
+                      Limpiar
+                    </button>
+                  </div>
+                </div>
+                <PermisosCatalogoEditor
+                  value={permisos}
+                  onChange={setPermisos}
+                />
+              </div>
+
+              {formError && (
+                <p className="text-sm text-red-400" role="alert">
+                  {formError}
+                </p>
+              )}
+
+              <div className="flex justify-end gap-2 border-t border-neutral-800 pt-4">
+                <button
+                  type="button"
+                  onClick={() => closeModal()}
+                  disabled={saving}
+                  className="rounded-full border border-neutral-700 px-4 py-2 text-sm text-neutral-300 hover:bg-neutral-800 disabled:opacity-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="rounded-full bg-white px-5 py-2 text-sm font-semibold text-neutral-950 hover:bg-neutral-200 disabled:opacity-50"
+                >
+                  {saving ? "Guardando…" : "Guardar"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

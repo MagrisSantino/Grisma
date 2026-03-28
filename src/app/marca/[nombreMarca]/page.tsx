@@ -1,10 +1,12 @@
 "use client";
 
+import { isRolAdmin } from "@/lib/auth-roles";
 import { FONDO_POR_MARCA } from "@/lib/brand-fondos";
+import { createClient } from "@/lib/supabase/client";
 import Image from "next/image";
 import Link from "next/link";
 import Script from "next/script";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import {
   useCallback,
   useEffect,
@@ -12,6 +14,20 @@ import {
   useRef,
   useState,
 } from "react";
+
+function labelFromEmail(email: string) {
+  if (!email) return "";
+  const i = email.indexOf("@");
+  return i > 0 ? email.slice(0, i) : email;
+}
+
+function initialsFromEmail(email: string) {
+  const base = labelFromEmail(email) || email;
+  const alnum = base.replace(/[^a-zA-ZáéíóúÁÉÍÓÚñÑ0-9]/g, "");
+  if (alnum.length >= 2) return alnum.slice(0, 2).toUpperCase();
+  if (alnum.length === 1) return (alnum + alnum).toUpperCase();
+  return "??";
+}
 
 type Planilla = {
   id: string;
@@ -163,6 +179,7 @@ const editableOutlineSection =
 
 export default function MarcaPage() {
   const params = useParams();
+  const router = useRouter();
   const nombreMarca = params.nombreMarca;
   const slug =
     typeof nombreMarca === "string"
@@ -171,11 +188,15 @@ export default function MarcaPage() {
         ? nombreMarca[0]
         : "crocs";
 
+  const [sessionReady, setSessionReady] = useState(false);
+  const [userEmail, setUserEmail] = useState("");
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [isDark, setIsDark] = useState(true);
+
   const initial = useMemo(() => getBrandData(slug), [slug]);
   const [data, setData] = useState<EditableBrand>(() =>
     deepCloneBrand(initial)
   );
-  const [isAdmin] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
   const [pickerTarget, setPickerTarget] = useState<ImagePickerTarget | null>(
     null
@@ -211,6 +232,59 @@ export default function MarcaPage() {
       fileInputRef.current.click();
     }
   }, [pickerTarget]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    if (isDark) root.classList.add("dark");
+    else root.classList.remove("dark");
+  }, [isDark]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      const supabase = createClient();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (cancelled) return;
+
+      if (!session) {
+        router.replace("/login");
+        return;
+      }
+
+      const email = session.user.email ?? "";
+      setUserEmail(email);
+
+      const { data: cliente, error } = await supabase
+        .from("clientes")
+        .select("rol")
+        .eq("id", session.user.id)
+        .single();
+
+      if (!cancelled && !error && isRolAdmin(cliente?.rol)) {
+        setIsAdmin(true);
+      }
+
+      if (!cancelled) setSessionReady(true);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
+
+  const handleSignOut = async () => {
+    const supabase = createClient();
+    await supabase.auth.signOut();
+    setUserEmail("");
+    setIsAdmin(false);
+    setIsEditing(false);
+    router.replace("/login");
+    router.refresh();
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -326,6 +400,16 @@ export default function MarcaPage() {
 
   const imgUnoptimized = (src: string) => src.startsWith("blob:");
 
+  const themeIcon = isDark ? "solar:sun-linear" : "solar:moon-linear";
+
+  if (!sessionReady) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-neutral-950 text-neutral-400">
+        <p className="text-sm">Cargando…</p>
+      </div>
+    );
+  }
+
   return (
     <>
       <Script
@@ -342,6 +426,68 @@ export default function MarcaPage() {
       />
 
       <div className="min-h-screen flex flex-col bg-neutral-50 dark:bg-neutral-950 text-neutral-900 dark:text-neutral-50 transition-colors duration-500">
+        <header className="sticky top-0 z-50 border-b border-neutral-200 dark:border-neutral-800/60 bg-white/70 dark:bg-neutral-950/70 backdrop-blur-xl transition-colors duration-500">
+          <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-6">
+            <Link href="/" className="flex items-center gap-2">
+              <div className="flex h-6 w-6 items-center justify-center rounded-sm bg-neutral-900 dark:bg-white transition-colors duration-500">
+                <span className="text-xs font-semibold tracking-tighter text-white dark:text-neutral-900">
+                  G
+                </span>
+              </div>
+              <span className="text-lg font-semibold tracking-tighter text-neutral-900 dark:text-white transition-colors duration-500">
+                GRISMA
+              </span>
+            </Link>
+
+            <div className="flex items-center gap-5">
+              <div className="hidden items-center gap-3 sm:flex">
+                <div className="flex h-8 w-8 items-center justify-center rounded-full border border-neutral-200 bg-neutral-100 transition-colors duration-500 dark:border-neutral-800 dark:bg-neutral-900">
+                  <span className="text-xs font-medium text-neutral-600 dark:text-neutral-400">
+                    {initialsFromEmail(userEmail)}
+                  </span>
+                </div>
+                <span className="max-w-[200px] truncate text-sm font-medium text-neutral-700 transition-colors duration-500 dark:text-neutral-300">
+                  {labelFromEmail(userEmail) || userEmail || "—"}
+                </span>
+              </div>
+
+              <div className="hidden h-4 w-px bg-neutral-300 dark:bg-neutral-800 sm:block" />
+
+              <button
+                type="button"
+                onClick={() => setIsDark((d) => !d)}
+                className="group flex items-center justify-center text-neutral-500 transition-colors hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-white"
+                title="Cambiar tema"
+                aria-label="Cambiar tema"
+              >
+                <iconify-icon
+                  icon={themeIcon}
+                  width="20"
+                  height="20"
+                  strokeWidth="1.5"
+                  className="transition-transform duration-300 group-hover:scale-110"
+                />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => void handleSignOut()}
+                className="group flex items-center justify-center text-neutral-500 transition-colors hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-white"
+                title="Cerrar sesión"
+                aria-label="Cerrar sesión"
+              >
+                <iconify-icon
+                  icon="solar:logout-2-linear"
+                  width="20"
+                  height="20"
+                  strokeWidth="1.5"
+                  className="transition-transform duration-300 group-hover:-translate-x-0.5"
+                />
+              </button>
+            </div>
+          </div>
+        </header>
+
         <div className="relative w-full">
           <div
             className="relative min-h-[min(52vh,520px)] w-full overflow-hidden"

@@ -1,15 +1,32 @@
 "use client";
 
+import { isRolAdmin } from "@/lib/auth-roles";
 import { FONDO_POR_MARCA } from "@/lib/brand-fondos";
+import { createClient } from "@/lib/supabase/client";
 import Image from "next/image";
 import Link from "next/link";
 import Script from "next/script";
+import { useRouter } from "next/navigation";
 import {
   useCallback,
   useEffect,
   useRef,
   useState,
 } from "react";
+
+function labelFromEmail(email: string) {
+  if (!email) return "";
+  const i = email.indexOf("@");
+  return i > 0 ? email.slice(0, i) : email;
+}
+
+function initialsFromEmail(email: string) {
+  const base = labelFromEmail(email) || email;
+  const alnum = base.replace(/[^a-zA-ZáéíóúÁÉÍÓÚñÑ0-9]/g, "");
+  if (alnum.length >= 2) return alnum.slice(0, 2).toUpperCase();
+  if (alnum.length === 1) return (alnum + alnum).toUpperCase();
+  return "??";
+}
 
 type HomeBrand = {
   id: string;
@@ -53,8 +70,12 @@ const editableHero =
   "rounded-lg outline-none ring-1 ring-dashed ring-neutral-400/60 focus:ring-2 focus:ring-neutral-500 dark:ring-neutral-500/50 dark:focus:ring-neutral-400";
 
 export default function Home() {
+  const router = useRouter();
+  const [sessionReady, setSessionReady] = useState(false);
+  const [userEmail, setUserEmail] = useState("");
+  const [isAdmin, setIsAdmin] = useState(false);
+
   const [isDark, setIsDark] = useState(true);
-  const [isAdmin] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
 
   const [heroLine1, setHeroLine1] = useState("Bienvenido a tu");
@@ -100,6 +121,53 @@ export default function Home() {
     else root.classList.remove("dark");
   }, [isDark]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      const supabase = createClient();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (cancelled) return;
+
+      if (!session) {
+        router.replace("/login");
+        return;
+      }
+
+      const email = session.user.email ?? "";
+      setUserEmail(email);
+
+      const { data: cliente, error } = await supabase
+        .from("clientes")
+        .select("rol")
+        .eq("id", session.user.id)
+        .single();
+
+      if (!cancelled && !error && isRolAdmin(cliente?.rol)) {
+        setIsAdmin(true);
+      }
+
+      if (!cancelled) setSessionReady(true);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
+
+  const handleSignOut = async () => {
+    const supabase = createClient();
+    await supabase.auth.signOut();
+    setUserEmail("");
+    setIsAdmin(false);
+    setIsEditing(false);
+    router.replace("/login");
+    router.refresh();
+  };
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     const target = pickerTarget;
@@ -134,6 +202,14 @@ export default function Home() {
   const cardBaseClass =
     "group relative block w-full aspect-4/3 sm:aspect-video rounded-2xl overflow-hidden shadow-sm hover:shadow-xl transition-shadow duration-500 bg-neutral-900";
 
+  if (!sessionReady) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-neutral-950 text-neutral-400">
+        <p className="text-sm">Cargando…</p>
+      </div>
+    );
+  }
+
   return (
     <>
       <Script
@@ -167,11 +243,11 @@ export default function Home() {
               <div className="hidden sm:flex items-center gap-3">
                 <div className="w-8 h-8 rounded-full border border-neutral-200 dark:border-neutral-800 flex items-center justify-center bg-neutral-100 dark:bg-neutral-900 transition-colors duration-500">
                   <span className="text-xs font-medium text-neutral-600 dark:text-neutral-400">
-                    LC
+                    {initialsFromEmail(userEmail)}
                   </span>
                 </div>
-                <span className="text-sm font-medium text-neutral-700 dark:text-neutral-300 transition-colors duration-500">
-                  Local Centro
+                <span className="max-w-[200px] truncate text-sm font-medium text-neutral-700 dark:text-neutral-300 transition-colors duration-500">
+                  {labelFromEmail(userEmail) || userEmail || "—"}
                 </span>
               </div>
 
@@ -195,6 +271,7 @@ export default function Home() {
 
               <button
                 type="button"
+                onClick={() => void handleSignOut()}
                 className="text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-white transition-colors flex items-center justify-center group"
                 title="Cerrar sesión"
                 aria-label="Cerrar sesión"
@@ -313,7 +390,7 @@ export default function Home() {
                       <img
                         src={brand.logo}
                         alt=""
-                        className="mx-auto block h-auto max-h-16 w-auto max-w-[min(320px,92%)] object-contain object-center drop-shadow-[0_2px_16px_rgba(0,0,0,0.6)] sm:max-h-[4.5rem] md:max-h-28"
+                        className="mx-auto block h-auto max-h-16 w-auto max-w-[min(320px,92%)] object-contain object-center drop-shadow-[0_2px_16px_rgba(0,0,0,0.6)] sm:max-h-18 md:max-h-28"
                       />
                       {isEditing && (
                         <button

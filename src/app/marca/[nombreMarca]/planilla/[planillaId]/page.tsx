@@ -5,6 +5,7 @@ import { isRolAdmin } from "@/lib/auth-roles";
 import { CATALOGO_BASE } from "@/lib/catalog-structure";
 import { createClient } from "@/lib/supabase/client";
 import { getStockItems, type StockItem } from "@/actions/stock";
+import { getPlanillaUrl } from "@/actions/planilla-urls";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import {
@@ -243,6 +244,10 @@ export default function PlanillaPage() {
   const [nombreLocal, setNombreLocal] = useState<string | null>(null);
   const [isDark, setIsDark] = useState(true);
 
+  // Google Sheets URL asignado al cliente para esta planilla (null = no tiene)
+  const [sheetsUrl, setSheetsUrl] = useState<string | null>(null);
+  const [loadingSheets, setLoadingSheets] = useState(true);
+
   const [stockItems, setStockItems] = useState<StockItem[]>([]);
   const [loadingStock, setLoadingStock] = useState(true);
   const [search, setSearch] = useState("");
@@ -288,21 +293,31 @@ export default function PlanillaPage() {
     else root.classList.remove("dark");
   }, [isDark]);
 
-  /* ── load stock ── */
+  /* ── load sheets URL + stock (fallback) ── */
   useEffect(() => {
     if (!sessionReady || !planillaId || !marcaSlug) return;
-    setLoadingStock(true);
-    getStockItems(planillaId, marcaSlug).then((items) => {
-      setStockItems(items);
-      // init qtys from cart
-      const initial: Record<string, number> = {};
-      for (const ci of cartItems) {
-        if (ci.planillaId === planillaId) {
-          initial[`${ci.stockItemId}:${ci.talle}`] = ci.cantidad;
-        }
+
+    // Primero chequeamos si hay un Google Sheets URL asignado
+    setLoadingSheets(true);
+    getPlanillaUrl(planillaId, marcaSlug).then((url) => {
+      setSheetsUrl(url);
+      setLoadingSheets(false);
+
+      // Si no hay URL, cargamos el stock de fallback
+      if (!url) {
+        setLoadingStock(true);
+        getStockItems(planillaId, marcaSlug).then((items) => {
+          setStockItems(items);
+          const initial: Record<string, number> = {};
+          for (const ci of cartItems) {
+            if (ci.planillaId === planillaId) {
+              initial[`${ci.stockItemId}:${ci.talle}`] = ci.cantidad;
+            }
+          }
+          setQtys(initial);
+          setLoadingStock(false);
+        });
       }
-      setQtys(initial);
-      setLoadingStock(false);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionReady, planillaId, marcaSlug]);
@@ -402,10 +417,96 @@ export default function PlanillaPage() {
 
   const themeIcon = isDark ? "solar:sun-linear" : "solar:moon-linear";
 
-  if (!sessionReady) {
+  if (!sessionReady || loadingSheets) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-neutral-950 text-neutral-400">
         <p className="text-sm">Cargando…</p>
+      </div>
+    );
+  }
+
+  /* ── Vista Google Sheets ─────────────────────────────────────────── */
+  if (sheetsUrl) {
+    // Convertir la URL a formato embebido si es necesario
+    const embedUrl = sheetsUrl.includes("/edit")
+      ? sheetsUrl.replace(/\/edit.*$/, "/edit?usp=sharing&rm=minimal")
+      : sheetsUrl;
+
+    return (
+      <div className="flex h-screen flex-col bg-neutral-950 text-neutral-50">
+        {/* Header compacto */}
+        <header className="flex shrink-0 items-center justify-between gap-3 border-b border-neutral-800/70 bg-neutral-950/90 px-4 py-2.5 backdrop-blur-xl">
+          <div className="flex min-w-0 items-center gap-3">
+            <Link
+              href={`/marca/${marcaSlug}`}
+              className="flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm text-neutral-400 transition hover:bg-neutral-800/60 hover:text-white"
+            >
+              <iconify-icon icon="solar:arrow-left-linear" width="16" height="16" strokeWidth="2" />
+              <span className="hidden sm:inline">Atrás</span>
+            </Link>
+            <div className="hidden h-4 w-px bg-neutral-800 sm:block" />
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold text-white">
+                {planillaTitle}
+              </p>
+              <p className="hidden text-xs text-neutral-500 sm:block">
+                {marcaName}{sectionTitle ? ` · ${sectionTitle}` : ""}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex shrink-0 items-center gap-2">
+            {/* Abrir en nueva pestaña */}
+            <a
+              href={sheetsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 rounded-lg border border-neutral-700 px-3 py-1.5 text-xs font-medium text-neutral-300 transition hover:border-neutral-500 hover:text-white"
+              title="Abrir en Google Sheets"
+            >
+              <iconify-icon icon="solar:arrow-right-up-linear" width="14" height="14" />
+              <span className="hidden sm:inline">Abrir en Sheets</span>
+            </a>
+
+            {/* Cart */}
+            <Link
+              href="/pedido"
+              className="relative flex items-center justify-center rounded-lg p-2 text-neutral-400 transition hover:bg-neutral-800/60 hover:text-white"
+              aria-label={`Ver pedido (${itemCount} pares)`}
+            >
+              <iconify-icon icon="solar:cart-large-minimalistic-linear" width="18" height="18" />
+              {itemCount > 0 && (
+                <span className="absolute -right-0.5 -top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500 text-[9px] font-bold text-white">
+                  {itemCount}
+                </span>
+              )}
+            </Link>
+
+            <div className="hidden h-4 w-px bg-neutral-800 sm:block" />
+            <span className="hidden text-xs text-neutral-500 sm:block">
+              {nombreLocal || labelFromEmail(userEmail)}
+            </span>
+
+            <button
+              type="button"
+              onClick={() => void handleSignOut()}
+              className="p-1.5 text-neutral-500 transition hover:text-white"
+              aria-label="Cerrar sesión"
+            >
+              <iconify-icon icon="solar:logout-2-linear" width="16" height="16" />
+            </button>
+          </div>
+        </header>
+
+        {/* Google Sheets iframe — ocupa todo el espacio restante */}
+        <div className="relative flex-1 bg-white">
+          <iframe
+            src={embedUrl}
+            className="h-full w-full border-0"
+            title={planillaTitle}
+            allow="clipboard-read; clipboard-write"
+          />
+        </div>
       </div>
     );
   }

@@ -86,6 +86,37 @@ CREATE POLICY "clients_insert_pedidos"
 -- El service role (admin) puede ver y modificar todo (bypasea RLS)
 
 
+-- ── planilla_urls ─────────────────────────────────────────────────────────────
+-- Guarda el link de Google Sheets de cada cliente para cada planilla.
+-- Un cliente puede tener un Sheet distinto por planilla.
+
+CREATE TABLE IF NOT EXISTS public.planilla_urls (
+  id          UUID        NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  cliente_id  UUID        NOT NULL REFERENCES auth.users (id) ON DELETE CASCADE,
+  planilla_id TEXT        NOT NULL,
+  marca_slug  TEXT        NOT NULL,
+  sheets_url  TEXT        NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (cliente_id, planilla_id, marca_slug)
+);
+
+CREATE INDEX IF NOT EXISTS planilla_urls_cliente_idx ON public.planilla_urls (cliente_id);
+
+CREATE TRIGGER planilla_urls_updated_at
+  BEFORE UPDATE ON public.planilla_urls
+  FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+ALTER TABLE public.planilla_urls ENABLE ROW LEVEL SECURITY;
+
+-- Cada cliente solo puede leer sus propios links
+CREATE POLICY "clients_select_own_planilla_urls"
+  ON public.planilla_urls FOR SELECT TO authenticated
+  USING (cliente_id = auth.uid());
+
+-- El service role administra todo (bypasea RLS)
+
+
 -- =============================================================================
 -- DATOS DE EJEMPLO (opcional)
 -- Descomentá las líneas de abajo para cargar stock de demo en la DB.

@@ -12,6 +12,10 @@ import {
   type PedidoRow,
 } from "@/actions/pedidos";
 import {
+  getPlanillaUrlsDeCliente,
+  guardarPlanillaUrls,
+} from "@/actions/planilla-urls";
+import {
   CATALOGO_BASE,
   emptyPermisos,
   permisosFullAccess,
@@ -300,6 +304,8 @@ export default function AdminPage() {
   const [permisos, setPermisos] = useState<PermisosCatalogo>(() =>
     emptyPermisos()
   );
+  // planillaUrls: key = "marcaSlug::planillaId", value = Google Sheets URL
+  const [planillaUrls, setPlanillaUrls] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -382,10 +388,11 @@ export default function AdminPage() {
     setNombreLocal("");
     setEsAdminRol(false);
     setPermisos(emptyPermisos());
+    setPlanillaUrls({});
     setModal({ mode: "create" });
   };
 
-  const openEdit = (row: ClienteAdminRow) => {
+  const openEdit = async (row: ClienteAdminRow) => {
     setFormError(null);
     setEmail(row.email);
     setPassword("");
@@ -396,13 +403,25 @@ export default function AdminPage() {
         ? clonePermisos(row.permisos_catalogo as PermisosCatalogo)
         : emptyPermisos()
     );
+    setPlanillaUrls({});
     setModal({ mode: "edit", row });
+
+    // Cargar URLs existentes de Google Sheets para este cliente
+    const res = await getPlanillaUrlsDeCliente(row.id);
+    if (res.ok) {
+      const map: Record<string, string> = {};
+      for (const u of res.data.urls) {
+        map[`${u.marcaSlug}::${u.planillaId}`] = u.sheetsUrl;
+      }
+      setPlanillaUrls(map);
+    }
   };
 
   const closeModal = (force?: boolean) => {
     if (saving && !force) return;
     setModal(null);
     setFormError(null);
+    setPlanillaUrls({});
   };
 
   const handleMarcarTodo = () => setPermisos(permisosFullAccess());
@@ -449,6 +468,20 @@ export default function AdminPage() {
           );
           return;
         }
+
+        // Guardar URLs de Google Sheets
+        const urlsArray = Object.entries(planillaUrls)
+          .filter(([, url]) => url.trim() !== "")
+          .map(([key, url]) => {
+            const [marcaSlug, planillaId] = key.split("::");
+            return { marcaSlug, planillaId, sheetsUrl: url };
+          });
+        const urlRes = await guardarPlanillaUrls(modal.row.id, urlsArray);
+        if (!urlRes.ok) {
+          // No bloquear el guardado si falla el guardado de URLs (tabla puede no existir aún)
+          console.warn("No se pudieron guardar las URLs:", urlRes.error);
+        }
+
         closeModal(true);
         await refreshList();
       }
@@ -659,7 +692,7 @@ export default function AdminPage() {
                           <td className="whitespace-nowrap px-4 py-4 text-right sm:px-6">
                             <button
                               type="button"
-                              onClick={() => openEdit(row)}
+                              onClick={() => void openEdit(row)}
                               className="rounded-lg border border-neutral-700 px-3 py-1.5 text-xs font-medium text-neutral-300 transition hover:border-neutral-500 hover:bg-neutral-800 hover:text-white"
                             >
                               Editar
@@ -1009,6 +1042,70 @@ export default function AdminPage() {
                   onChange={setPermisos}
                 />
               </div>
+
+              {/* ── Links de Google Sheets ── */}
+              {modal?.mode === "edit" && (
+                <div>
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-xs font-medium text-neutral-400">
+                      Links de Google Sheets
+                    </span>
+                    <span className="text-xs text-neutral-600">
+                      Una copia del Sheet por planilla
+                    </span>
+                  </div>
+                  <div className="space-y-3 rounded-xl border border-neutral-800 bg-neutral-950/50 p-3">
+                    <p className="text-xs text-neutral-500">
+                      Pegá el link de Google Sheets que le corresponde a este cliente para cada planilla. El cliente verá ese Sheet cuando abra la planilla.
+                    </p>
+                    {CATALOGO_BASE.map((marca) =>
+                      marca.sections.map((section) =>
+                        section.planillas.map((planilla) => {
+                          const key = `${marca.slug}::${planilla.id}`;
+                          const url = planillaUrls[key] ?? "";
+                          const tienePermiso =
+                            (permisos[marca.slug]?.[section.id] ?? []).includes(
+                              planilla.id
+                            );
+                          if (!tienePermiso) return null;
+                          return (
+                            <div key={key}>
+                              <label className="mb-1 block text-xs text-neutral-400">
+                                <span className="font-medium text-neutral-300">
+                                  {marca.name}
+                                </span>{" "}
+                                · {section.title} ·{" "}
+                                <span className="text-neutral-500">
+                                  {planilla.title}
+                                </span>
+                              </label>
+                              <input
+                                type="url"
+                                value={url}
+                                disabled={saving}
+                                onChange={(e) =>
+                                  setPlanillaUrls((prev) => ({
+                                    ...prev,
+                                    [key]: e.target.value,
+                                  }))
+                                }
+                                placeholder="https://docs.google.com/spreadsheets/d/..."
+                                className="w-full rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2 text-xs text-white placeholder:text-neutral-600 focus:border-neutral-600 focus:outline-none disabled:opacity-60"
+                              />
+                            </div>
+                          );
+                        })
+                      )
+                    )}
+                    {/* Si no tiene ningún permiso configurado */}
+                    {Object.keys(permisos).length === 0 && (
+                      <p className="text-xs text-neutral-600">
+                        Asigná permisos de catálogo arriba para ver los campos de links.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {formError && (
                 <p className="text-sm text-red-400" role="alert">

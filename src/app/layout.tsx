@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import { Geist_Mono, Inter } from "next/font/google";
+import Script from "next/script";
+import { CartProvider } from "@/components/cart-provider";
 import "./globals.css";
 
 const inter = Inter({
@@ -28,7 +30,13 @@ export default function RootLayout({
       className={`${inter.variable} ${geistMono.variable} dark h-full antialiased`}
       suppressHydrationWarning
     >
-      <body className="min-h-full flex flex-col font-sans">{children}</body>
+      <body className="min-h-full flex flex-col font-sans">
+        <Script
+          src="https://code.iconify.design/iconify-icon/1.0.7/iconify-icon.min.js"
+          strategy="lazyOnload"
+        />
+        <CartProvider>{children}</CartProvider>
+      </body>
     </html>
   );
 }

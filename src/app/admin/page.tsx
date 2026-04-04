@@ -6,6 +6,12 @@ import {
   type ClienteAdminRow,
 } from "@/actions/admin";
 import {
+  actualizarEstadoPedido,
+  listarPedidosAdmin,
+  type PedidoEstado,
+  type PedidoRow,
+} from "@/actions/pedidos";
+import {
   CATALOGO_BASE,
   emptyPermisos,
   permisosFullAccess,
@@ -25,7 +31,7 @@ import {
   useState,
 } from "react";
 
-type AdminTab = "clientes" | "marcas";
+type AdminTab = "clientes" | "marcas" | "pedidos";
 
 type ModalState =
   | null
@@ -281,6 +287,11 @@ export default function AdminPage() {
   const [listLoading, setListLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
 
+  const [pedidos, setPedidos] = useState<PedidoRow[]>([]);
+  const [pedidosLoading, setPedidosLoading] = useState(false);
+  const [pedidosError, setPedidosError] = useState<string | null>(null);
+  const [updatingPedidoId, setUpdatingPedidoId] = useState<string | null>(null);
+
   const [modal, setModal] = useState<ModalState>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -304,6 +315,26 @@ export default function AdminPage() {
     }
     setListLoading(false);
   }, []);
+
+  const refreshPedidos = useCallback(async () => {
+    setPedidosLoading(true);
+    setPedidosError(null);
+    const res = await listarPedidosAdmin();
+    if (!res.ok) {
+      setPedidosError(res.error);
+      setPedidos([]);
+    } else {
+      setPedidos(res.data.rows);
+    }
+    setPedidosLoading(false);
+  }, []);
+
+  const handleCambiarEstado = async (pedidoId: string, estado: PedidoEstado) => {
+    setUpdatingPedidoId(pedidoId);
+    await actualizarEstadoPedido(pedidoId, estado);
+    setUpdatingPedidoId(null);
+    await refreshPedidos();
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -473,12 +504,12 @@ export default function AdminPage() {
           )}
         </div>
 
-        <div className="mb-10 grid gap-4 sm:grid-cols-2">
+        <div className="mb-10 grid gap-4 sm:grid-cols-3">
           <button
             type="button"
             onClick={() => setTab("clientes")}
             className={[
-              "group rounded-2xl border p-6 text-left transition sm:p-8",
+              "group rounded-2xl border p-5 text-left transition sm:p-6",
               tab === "clientes"
                 ? "border-white/20 bg-neutral-900/90 ring-1 ring-white/15"
                 : "border-neutral-800 bg-neutral-900/40 hover:border-neutral-600 hover:bg-neutral-900/70",
@@ -487,11 +518,40 @@ export default function AdminPage() {
             <span className="text-xs font-medium uppercase tracking-[0.15em] text-neutral-500 group-hover:text-neutral-400">
               Sección
             </span>
-            <h2 className="mt-2 text-xl font-semibold tracking-tight text-white sm:text-2xl">
-              Gestión de Clientes
+            <h2 className="mt-2 text-lg font-semibold tracking-tight text-white sm:text-xl">
+              Clientes
             </h2>
-            <p className="mt-2 text-sm text-neutral-400">
-              Locales, accesos y permisos granulares.
+            <p className="mt-1 text-sm text-neutral-400">
+              Locales, accesos y permisos.
+            </p>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setTab("pedidos");
+              void refreshPedidos();
+            }}
+            className={[
+              "group rounded-2xl border p-5 text-left transition sm:p-6",
+              tab === "pedidos"
+                ? "border-white/20 bg-neutral-900/90 ring-1 ring-white/15"
+                : "border-neutral-800 bg-neutral-900/40 hover:border-neutral-600 hover:bg-neutral-900/70",
+            ].join(" ")}
+          >
+            <span className="text-xs font-medium uppercase tracking-[0.15em] text-neutral-500 group-hover:text-neutral-400">
+              Sección
+            </span>
+            <h2 className="mt-2 text-lg font-semibold tracking-tight text-white sm:text-xl">
+              Pedidos
+              {pedidos.filter((p) => p.estado === "pendiente").length > 0 && (
+                <span className="ml-2 inline-flex items-center justify-center rounded-full bg-amber-500 px-1.5 py-0.5 text-xs font-bold text-white">
+                  {pedidos.filter((p) => p.estado === "pendiente").length}
+                </span>
+              )}
+            </h2>
+            <p className="mt-1 text-sm text-neutral-400">
+              Pedidos de clientes y estados.
             </p>
           </button>
 
@@ -499,7 +559,7 @@ export default function AdminPage() {
             type="button"
             onClick={() => setTab("marcas")}
             className={[
-              "group rounded-2xl border p-6 text-left transition sm:p-8",
+              "group rounded-2xl border p-5 text-left transition sm:p-6",
               tab === "marcas"
                 ? "border-white/20 bg-neutral-900/90 ring-1 ring-white/15"
                 : "border-neutral-800 bg-neutral-900/40 hover:border-neutral-600 hover:bg-neutral-900/70",
@@ -508,11 +568,11 @@ export default function AdminPage() {
             <span className="text-xs font-medium uppercase tracking-[0.15em] text-neutral-500 group-hover:text-neutral-400">
               Sección
             </span>
-            <h2 className="mt-2 text-xl font-semibold tracking-tight text-white sm:text-2xl">
-              Gestión de Marcas
+            <h2 className="mt-2 text-lg font-semibold tracking-tight text-white sm:text-xl">
+              Marcas
             </h2>
-            <p className="mt-2 text-sm text-neutral-400">
-              Catálogos, activación y visibilidad en el portal.
+            <p className="mt-1 text-sm text-neutral-400">
+              Catálogos y visibilidad en el portal.
             </p>
           </button>
         </div>
@@ -612,6 +672,191 @@ export default function AdminPage() {
                 </table>
               )}
             </div>
+          </section>
+        )}
+
+        {tab === "pedidos" && (
+          <section aria-labelledby="pedidos-heading">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 id="pedidos-heading" className="text-sm font-semibold text-white">
+                Pedidos recibidos
+              </h3>
+              <button
+                type="button"
+                onClick={() => void refreshPedidos()}
+                disabled={pedidosLoading}
+                className="text-xs text-neutral-500 underline hover:text-white disabled:opacity-50"
+              >
+                Actualizar
+              </button>
+            </div>
+
+            {pedidosError && (
+              <p className="mb-4 rounded-lg border border-red-800 bg-red-950/30 px-4 py-2 text-xs text-red-400">
+                {pedidosError}
+              </p>
+            )}
+
+            {pedidosLoading ? (
+              <p className="py-10 text-center text-sm text-neutral-500">Cargando pedidos…</p>
+            ) : pedidos.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-neutral-800 py-16 text-center">
+                <p className="text-sm text-neutral-500">No hay pedidos todavía.</p>
+                <p className="mt-1 text-xs text-neutral-600">
+                  Cuando un cliente envíe un pedido aparecerá aquí.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {pedidos.map((pedido) => {
+                  const totalPares = pedido.items.reduce(
+                    (acc, i) => acc + i.cantidad,
+                    0
+                  );
+                  const isPending = updatingPedidoId === pedido.id;
+
+                  const estadoColors: Record<string, string> = {
+                    pendiente: "border-amber-700/60 bg-amber-950/40 text-amber-200",
+                    revisando: "border-blue-700/60 bg-blue-950/40 text-blue-200",
+                    aprobado: "border-emerald-700/60 bg-emerald-950/40 text-emerald-200",
+                    rechazado: "border-red-700/60 bg-red-950/40 text-red-300",
+                  };
+
+                  return (
+                    <div
+                      key={pedido.id}
+                      className="rounded-2xl border border-neutral-800 bg-neutral-900/30 overflow-hidden"
+                    >
+                      {/* header */}
+                      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-neutral-800 bg-neutral-900/50 px-5 py-4">
+                        <div>
+                          <p className="font-semibold text-white">
+                            {pedido.nombre_local || "Sin nombre"}
+                          </p>
+                          <p className="mt-0.5 text-xs text-neutral-500">
+                            {new Date(pedido.created_at).toLocaleString("es-AR", {
+                              day: "2-digit",
+                              month: "2-digit",
+                              year: "numeric",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
+                            {" · "}
+                            {totalPares} par{totalPares !== 1 ? "es" : ""}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span
+                            className={[
+                              "rounded-full border px-2.5 py-0.5 text-xs font-medium",
+                              estadoColors[pedido.estado] ?? "border-neutral-700 text-neutral-300",
+                            ].join(" ")}
+                          >
+                            {pedido.estado.charAt(0).toUpperCase() + pedido.estado.slice(1)}
+                          </span>
+                          {/* action buttons */}
+                          {pedido.estado === "pendiente" && (
+                            <>
+                              <button
+                                type="button"
+                                disabled={isPending}
+                                onClick={() => void handleCambiarEstado(pedido.id, "revisando")}
+                                className="rounded-lg border border-neutral-700 px-3 py-1 text-xs text-neutral-300 transition hover:border-blue-600 hover:text-blue-300 disabled:opacity-40"
+                              >
+                                En revisión
+                              </button>
+                              <button
+                                type="button"
+                                disabled={isPending}
+                                onClick={() => void handleCambiarEstado(pedido.id, "aprobado")}
+                                className="rounded-lg border border-emerald-700/60 bg-emerald-950/30 px-3 py-1 text-xs text-emerald-300 transition hover:bg-emerald-900/50 disabled:opacity-40"
+                              >
+                                Aprobar
+                              </button>
+                              <button
+                                type="button"
+                                disabled={isPending}
+                                onClick={() => void handleCambiarEstado(pedido.id, "rechazado")}
+                                className="rounded-lg border border-red-700/60 bg-red-950/20 px-3 py-1 text-xs text-red-400 transition hover:bg-red-950/40 disabled:opacity-40"
+                              >
+                                Rechazar
+                              </button>
+                            </>
+                          )}
+                          {pedido.estado === "revisando" && (
+                            <>
+                              <button
+                                type="button"
+                                disabled={isPending}
+                                onClick={() => void handleCambiarEstado(pedido.id, "aprobado")}
+                                className="rounded-lg border border-emerald-700/60 bg-emerald-950/30 px-3 py-1 text-xs text-emerald-300 transition hover:bg-emerald-900/50 disabled:opacity-40"
+                              >
+                                Aprobar
+                              </button>
+                              <button
+                                type="button"
+                                disabled={isPending}
+                                onClick={() => void handleCambiarEstado(pedido.id, "rechazado")}
+                                className="rounded-lg border border-red-700/60 bg-red-950/20 px-3 py-1 text-xs text-red-400 transition hover:bg-red-950/40 disabled:opacity-40"
+                              >
+                                Rechazar
+                              </button>
+                            </>
+                          )}
+                          {(pedido.estado === "aprobado" || pedido.estado === "rechazado") && (
+                            <button
+                              type="button"
+                              disabled={isPending}
+                              onClick={() => void handleCambiarEstado(pedido.id, "pendiente")}
+                              className="rounded-lg border border-neutral-700 px-3 py-1 text-xs text-neutral-500 transition hover:text-neutral-300 disabled:opacity-40"
+                            >
+                              Reabrir
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* items */}
+                      <div className="divide-y divide-neutral-800/50">
+                        {pedido.items.slice(0, 8).map((item) => (
+                          <div
+                            key={item.id}
+                            className="flex items-center justify-between gap-3 px-5 py-2.5 text-sm"
+                          >
+                            <span className="text-neutral-300">
+                              {item.modelo}
+                              {item.color ? (
+                                <span className="ml-1 text-neutral-500">{item.color}</span>
+                              ) : null}
+                              {" "}
+                              <span className="text-neutral-500">T. {item.talle}</span>
+                            </span>
+                            <span className="tabular-nums font-semibold text-white">
+                              {item.cantidad} par{item.cantidad !== 1 ? "es" : ""}
+                            </span>
+                          </div>
+                        ))}
+                        {pedido.items.length > 8 && (
+                          <p className="px-5 py-2 text-xs text-neutral-600">
+                            …y {pedido.items.length - 8} ítems más
+                          </p>
+                        )}
+                      </div>
+
+                      {/* notas */}
+                      {pedido.notas && (
+                        <div className="border-t border-neutral-800 bg-neutral-900/30 px-5 py-3">
+                          <p className="text-xs text-neutral-500">
+                            <span className="font-medium text-neutral-400">Nota:</span>{" "}
+                            {pedido.notas}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </section>
         )}
 

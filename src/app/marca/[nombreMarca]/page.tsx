@@ -1,11 +1,11 @@
 "use client";
 
+import { useCart } from "@/components/cart-provider";
 import { isRolAdmin } from "@/lib/auth-roles";
 import { FONDO_POR_MARCA } from "@/lib/brand-fondos";
 import { createClient } from "@/lib/supabase/client";
 import Image from "next/image";
 import Link from "next/link";
-import Script from "next/script";
 import { useParams, useRouter } from "next/navigation";
 import {
   useCallback,
@@ -161,9 +161,6 @@ function deepCloneBrand(b: EditableBrand): EditableBrand {
   };
 }
 
-function openPlanillaViewer(listName: string) {
-  alert(`Abriendo visor de planilla para: ${listName}`);
-}
 
 let planillaIdSeq = 0;
 function newPlanillaId() {
@@ -188,8 +185,11 @@ export default function MarcaPage() {
         ? nombreMarca[0]
         : "crocs";
 
+  const { itemCount } = useCart();
+
   const [sessionReady, setSessionReady] = useState(false);
   const [userEmail, setUserEmail] = useState("");
+  const [nombreLocal, setNombreLocal] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [isDark, setIsDark] = useState(true);
 
@@ -260,12 +260,13 @@ export default function MarcaPage() {
 
       const { data: cliente, error } = await supabase
         .from("clientes")
-        .select("rol")
+        .select("rol, nombre_local")
         .eq("id", session.user.id)
         .single();
 
-      if (!cancelled && !error && isRolAdmin(cliente?.rol)) {
-        setIsAdmin(true);
+      if (!cancelled && !error) {
+        if (isRolAdmin(cliente?.rol)) setIsAdmin(true);
+        setNombreLocal(cliente?.nombre_local ?? null);
       }
 
       if (!cancelled) setSessionReady(true);
@@ -412,10 +413,6 @@ export default function MarcaPage() {
 
   return (
     <>
-      <Script
-        src="https://code.iconify.design/iconify-icon/1.0.7/iconify-icon.min.js"
-        strategy="lazyOnload"
-      />
       <input
         ref={fileInputRef}
         type="file"
@@ -439,7 +436,29 @@ export default function MarcaPage() {
               </span>
             </Link>
 
-            <div className="flex items-center gap-5">
+            <div className="flex items-center gap-4">
+              {/* cart */}
+              <Link
+                href="/pedido"
+                className="relative flex items-center justify-center text-neutral-500 transition-colors hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-white"
+                title="Ver pedido"
+                aria-label={`Ver pedido (${itemCount} pares)`}
+              >
+                <iconify-icon
+                  icon="solar:cart-large-minimalistic-linear"
+                  width="20"
+                  height="20"
+                  strokeWidth="1.5"
+                />
+                {itemCount > 0 && (
+                  <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500 text-[9px] font-bold text-white">
+                    {itemCount > 99 ? "99+" : itemCount}
+                  </span>
+                )}
+              </Link>
+
+              <div className="hidden h-4 w-px bg-neutral-300 dark:bg-neutral-800 sm:block" />
+
               <div className="hidden items-center gap-3 sm:flex">
                 <div className="flex h-8 w-8 items-center justify-center rounded-full border border-neutral-200 bg-neutral-100 transition-colors duration-500 dark:border-neutral-800 dark:bg-neutral-900">
                   <span className="text-xs font-medium text-neutral-600 dark:text-neutral-400">
@@ -447,7 +466,7 @@ export default function MarcaPage() {
                   </span>
                 </div>
                 <span className="max-w-[200px] truncate text-sm font-medium text-neutral-700 transition-colors duration-500 dark:text-neutral-300">
-                  {labelFromEmail(userEmail) || userEmail || "—"}
+                  {nombreLocal || labelFromEmail(userEmail) || userEmail || "—"}
                 </span>
               </div>
 
@@ -644,7 +663,8 @@ export default function MarcaPage() {
                     <button
                       type="button"
                       onClick={() =>
-                        !isEditing && openPlanillaViewer(p.title)
+                        !isEditing &&
+                        router.push(`/marca/${slug}/planilla/${p.id}`)
                       }
                       className="relative w-full cursor-pointer overflow-hidden rounded-2xl border border-neutral-200/80 bg-white text-left shadow-sm ring-1 ring-black/5 transition-all duration-300 hover:-translate-y-1 hover:shadow-xl focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-neutral-900 dark:border-neutral-800 dark:bg-neutral-900 dark:ring-white/10 dark:hover:border-neutral-600 dark:focus-visible:outline-white disabled:translate-y-0 disabled:shadow-sm"
                       disabled={isEditing}
@@ -729,7 +749,7 @@ export default function MarcaPage() {
                             </p>
                           )}
                           <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
-                            Planilla de stock · clic para abrir
+                            Stock y pedidos · clic para ver
                           </p>
                         </div>
                       </div>

@@ -1,11 +1,11 @@
 "use client";
 
+import { useCart } from "@/components/cart-provider";
 import { isRolAdmin } from "@/lib/auth-roles";
 import { FONDO_POR_MARCA } from "@/lib/brand-fondos";
 import { createClient } from "@/lib/supabase/client";
 import Image from "next/image";
 import Link from "next/link";
-import Script from "next/script";
 import { useRouter } from "next/navigation";
 import {
   useCallback,
@@ -71,8 +71,11 @@ const editableHero =
 
 export default function Home() {
   const router = useRouter();
+  const { itemCount } = useCart();
+
   const [sessionReady, setSessionReady] = useState(false);
   const [userEmail, setUserEmail] = useState("");
+  const [nombreLocal, setNombreLocal] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
 
   const [isDark, setIsDark] = useState(true);
@@ -142,12 +145,13 @@ export default function Home() {
 
       const { data: cliente, error } = await supabase
         .from("clientes")
-        .select("rol")
+        .select("rol, nombre_local")
         .eq("id", session.user.id)
         .single();
 
-      if (!cancelled && !error && isRolAdmin(cliente?.rol)) {
-        setIsAdmin(true);
+      if (!cancelled && !error) {
+        if (isRolAdmin(cliente?.rol)) setIsAdmin(true);
+        setNombreLocal(cliente?.nombre_local ?? null);
       }
 
       if (!cancelled) setSessionReady(true);
@@ -212,10 +216,6 @@ export default function Home() {
 
   return (
     <>
-      <Script
-        src="https://code.iconify.design/iconify-icon/1.0.7/iconify-icon.min.js"
-        strategy="lazyOnload"
-      />
       <input
         ref={fileInputRef}
         type="file"
@@ -239,7 +239,40 @@ export default function Home() {
               </span>
             </div>
 
-            <div className="flex items-center gap-5">
+            <div className="flex items-center gap-4">
+              {/* cart */}
+              <Link
+                href="/pedido"
+                className="relative flex items-center justify-center text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-white transition-colors"
+                title="Ver pedido"
+                aria-label={`Ver pedido (${itemCount} pares)`}
+              >
+                <iconify-icon
+                  icon="solar:cart-large-minimalistic-linear"
+                  width="20"
+                  height="20"
+                  strokeWidth="1.5"
+                />
+                {itemCount > 0 && (
+                  <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500 text-[9px] font-bold text-white">
+                    {itemCount > 99 ? "99+" : itemCount}
+                  </span>
+                )}
+              </Link>
+
+              {isAdmin && (
+                <Link
+                  href="/admin"
+                  className="hidden sm:flex items-center gap-1.5 rounded-full border border-neutral-200 dark:border-neutral-800 px-3 py-1.5 text-xs font-medium text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-white transition-colors"
+                  title="Panel de administración"
+                >
+                  <iconify-icon icon="solar:settings-linear" width="14" height="14" />
+                  Admin
+                </Link>
+              )}
+
+              <div className="h-4 w-px bg-neutral-300 dark:bg-neutral-800 hidden sm:block transition-colors duration-500" />
+
               <div className="hidden sm:flex items-center gap-3">
                 <div className="w-8 h-8 rounded-full border border-neutral-200 dark:border-neutral-800 flex items-center justify-center bg-neutral-100 dark:bg-neutral-900 transition-colors duration-500">
                   <span className="text-xs font-medium text-neutral-600 dark:text-neutral-400">
@@ -247,7 +280,7 @@ export default function Home() {
                   </span>
                 </div>
                 <span className="max-w-[200px] truncate text-sm font-medium text-neutral-700 dark:text-neutral-300 transition-colors duration-500">
-                  {labelFromEmail(userEmail) || userEmail || "—"}
+                  {nombreLocal || labelFromEmail(userEmail) || userEmail || "—"}
                 </span>
               </div>
 
